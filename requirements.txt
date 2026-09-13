@@ -1,0 +1,5 @@
+torch>=2.2
+numpy>=1.24
+# optional, only for train/train_text.py
+# datasets>=2.14
+# matplotlib>=3.7

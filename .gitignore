@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+runs/
+*.pt
+*.i8
+*.f32
+hf_cache/
+ui.log
+runs_*.log
+hf_dl.log
