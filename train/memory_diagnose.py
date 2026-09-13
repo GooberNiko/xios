@@ -196,7 +196,9 @@ def main():
     print("  -> if the gradient is 0, the values cannot learn (candidate 1)")
 
     from train.train import build_optimizer, TrainArgs, lr_at
-    targs = TrainArgs(steps=a.steps, lr=a.lr, device="cpu", amp=False)
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    m = m.to(dev); ids, labels = ids.to(dev), labels.to(dev)
+    targs = TrainArgs(steps=a.steps, lr=a.lr, device=dev, amp=False)
     opt, sopt = build_optimizer(m, targs)
     m.train()
     for step in range(a.steps):
@@ -207,7 +209,7 @@ def main():
             for gg in sopt.param_groups:
                 gg["lr"] = lr
         i2, l2 = batch()
-        o = m(i2, labels=l2)
+        o = m(i2.to(dev), labels=l2.to(dev))
         opt.zero_grad(set_to_none=True)
         if sopt:
             sopt.zero_grad(set_to_none=True)

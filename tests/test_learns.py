@@ -13,6 +13,8 @@ should reach ~100%. If XIOS does not, nothing downstream is worth reading.
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import time
+
 import torch
 
 from xios.config import get_config
@@ -32,14 +34,24 @@ T.TASKS.setdefault("copy", _copy_task)
 T.WIDTH_ARG.setdefault("copy", ("width", 6))
 
 
-def fit(model, task, steps=800, bs=64, lr=1e-3, seq=40, width=6, device="cpu"):
+def fit(model, task, steps=800, bs=64, lr=1e-3, seq=40, width=6,
+        device=None, tag=""):
+    # Default to the GPU when there is one. This defaulted to "cpu" and main()
+    # never overrode it, so on Colab the whole test ground away on 2 vCPUs --
+    # silently, because there was no progress output either.
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(0)
     model = model.to(device)
     ds = TaskDataset(task, 1, 1, seq, seed=0, width=width)
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
     ponder = getattr(getattr(model, "core", None), "ponder", None)
     model.train()
+    t0 = time.time()
     for step in range(steps):
+        if step and step % max(steps // 5, 1) == 0:
+            rate = step / max(time.time() - t0, 1e-9)
+            print(f"      {tag} {step}/{steps}  {rate:.1f} steps/s  "
+                  f"eta {(steps-step)/max(rate,1e-9):.0f}s", flush=True)
         ids, lab, mask, _ = ds.batch(bs, device=device)
         out = model(ids, labels=lab, loss_mask=mask)
         opt.zero_grad(set_to_none=True)
@@ -66,7 +78,7 @@ def main():
         print(f"\n--- {task} (one step, width 6) ---")
         for name, build in (("baseline", lambda: matched_baseline(cfg)),
                             ("xios", lambda: XiosChat(cfg))):
-            r = fit(build(), task, seq=seq, steps=steps)
+            r = fit(build(), task, seq=seq, steps=steps, tag=f"{name}/{task}")
             extra = f"  mean depth {r['mean_depth']:.2f}" if "mean_depth" in r else ""
             print(f"  {name:9s} exact match {r['exact_match']:6.1%}{extra}")
             results[(task, name)] = r["exact_match"]
