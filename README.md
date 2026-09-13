@@ -847,6 +847,48 @@ nowhere to put facts. Three options, in the order I would try them:
 3. **Cut it.** If neither of the above pans out, the memory is 800 lines that
    earn nothing and should be deleted rather than defended.
 
+### Experiment 7c — third attempt at the memory, with the confound fixed
+
+Experiment 7's fact-recall probe had a flaw I identified but did not fix: at a
+fixed step budget, raising the fact count lowers how often each fact is seen
+(128 looks at 1k facts, 26 at 5k). It measured *training budget*, not capacity.
+
+Fixed properly: steps now scale as ``facts x exposures / batch`` so every point
+gets the same number of looks, and the model is shrunk (dim 64, one core block)
+so capacity can actually bind.
+
+| facts | dense | memory (learned) | frozen (random) |
+|---|---|---|---|
+| 200 | 83.0% | **99.0%** | **95.5%** |
+| 400 | 35.0% | **47.5%** | 26.8% |
+| 800 | 5.9% | 4.4% | **10.6%** |
+
+The memory does beat a dense FFN at 200 and 400 facts. **But frozen random
+values very nearly match it at 200 (95.5% vs 99.0%) and beat it at 800.** So
+whatever advantage exists comes from the *architecture* — a top-k sparse
+nonlinearity is sometimes a better layer than a dense FFN — and not from the
+stored contents. The ordering also flips between fact counts, and these are
+single seeds on a high-variance task, so no individual number here should be
+read as real; the consistent part is that learned never reliably beats random.
+
+Capacity never bound, either. A 0.4M-parameter model memorises 2,000 facts
+(2.5 KB) without effort; reaching its practical limit needs ~80k facts, which
+is roughly four hours per arm on this CPU. **The capacity-binding regime is not
+reachable here**, so this cannot be the experiment that vindicates the store.
+
+**Status after three independent probes, with the addressing bugs fixed:**
+
+| probe | learned vs frozen |
+|---|---|
+| language modelling | 1.008x |
+| language modelling, after fixing addressing | 0.992x |
+| fact recall, exposure-controlled, 3 fact counts | ties or loses |
+
+Three ways of asking, one answer: at reachable scale the store's *contents*
+carry nothing. The mechanism gets one more shot — at GPU scale, where
+product-key memory is reported to work — and is otherwise cut. What is no
+longer open is whether more CPU effort would change the answer; it would not.
+
 ### Experiment 8 — the adaptive-depth controller is harmful; cut it
 
 The roadmap said a mechanism that does nothing should be made to work or

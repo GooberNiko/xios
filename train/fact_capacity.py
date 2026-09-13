@@ -97,8 +97,12 @@ class FactStore:
 
 
 def build(variant: str, store: FactStore, a):
+    # head_dim is 64 in the nano preset, so a narrow model has few heads;
+    # n_kv_heads must divide them
+    n_heads = max(1, a.dim // 64)
     kw = dict(vocab_size=store.vocab, max_seq_len=max(store.seq_len, 32),
-              dim=a.dim, core_blocks=a.core_blocks, n_kv_heads=2,
+              dim=a.dim, core_blocks=a.core_blocks,
+              n_kv_heads=1 if n_heads < 2 else 2,
               max_iters=a.max_iters, target_depth=a.target_depth,
               attn_every=2, attn_window=32, cond_dim=128,
               prelude_blocks=1, coda_blocks=1)
@@ -173,16 +177,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--facts", default="500,2000,8000")
     ap.add_argument("--variants", default="dense,memory,frozen")
-    ap.add_argument("--steps", type=int, default=600)
+    ap.add_argument("--exposures", type=int, default=120,
+                    help="times each fact is seen; steps scale with fact count "
+                         "so capacity is the only variable")
+    ap.add_argument("--steps", type=int, default=0,
+                    help="override; 0 = derive from --exposures")
     ap.add_argument("--batch-size", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-3)
-    ap.add_argument("--dim", type=int, default=128)
-    ap.add_argument("--core-blocks", type=int, default=2)
-    ap.add_argument("--max-iters", type=int, default=4)
+    ap.add_argument("--dim", type=int, default=64)
+    ap.add_argument("--core-blocks", type=int, default=1)
+    ap.add_argument("--max-iters", type=int, default=2)
     ap.add_argument("--target-depth", type=float, default=2.0)
     ap.add_argument("--grid", type=int, default=64)
     ap.add_argument("--heads", type=int, default=4)
-    ap.add_argument("--value-dim", type=int, default=64)
+    ap.add_argument("--value-dim", type=int, default=32)
     ap.add_argument("--topk", type=int, default=16)
     ap.add_argument("--device", default=None)
     ap.add_argument("--out", default="runs/factcap")
@@ -194,17 +202,22 @@ def main():
 
     for nf in [int(x) for x in a.facts.split(",")]:
         store = FactStore(nf, seed=0)
+        a.steps = a.steps or 0
+        steps = max(200, nf * a.exposures // a.batch_size)
         print(f"\n{'='*70}\n{nf} arbitrary facts "
               f"(key {store.key_len} symbols -> value {store.val_len}, "
               f"alphabet {store.alphabet})\n{'='*70}")
         # information content of the fact set, for reference
         bits = nf * store.val_len * math.log2(store.alphabet)
-        print(f"  the fact set contains {bits/8/1e3:.1f} KB of information")
+        print(f"  the fact set contains {bits/8/1e3:.1f} KB of information; "
+              f"{steps} steps = {a.exposures} exposures per fact")
         for variant in a.variants.split(","):
             torch.manual_seed(0)
             m = build(variant, store, a)
             res, disk = resident_and_disk(m)
-            m = train_one(m, store, a, dev, tag=f"{variant}/{nf}")
+            import copy as _copy
+            aa = _copy.copy(a); aa.steps = steps
+            m = train_one(m, store, aa, dev, tag=f"{variant}/{nf}")
             r = recall(m, store, dev)
             print(f"  {variant:8s} recall {r:6.1%}   resident {res/1e6:.2f}M "
                   f"  disk {disk/1e6:.2f}M")
