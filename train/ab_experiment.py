@@ -247,8 +247,20 @@ def main():
                 print(f"depth-vs-difficulty correlation: {slope:+.3f}  "
                       f"({'allocating more compute to harder problems' if slope > 0.3 else 'NOT allocating adaptively'})")
 
-    (out / "results.json").write_text(json.dumps(
-        {"config": args.__dict__, "table": table}, indent=2), encoding="utf-8")
+    # Preserve the config that TRAINED these checkpoints. An --eval-only run
+    # has its own argparse defaults, and overwriting the record with them made
+    # two runs look like they used different hyperparameters when they had not.
+    rec = {"config": args.__dict__, "table": table}
+    prev = out / "results.json"
+    if args.eval_only and prev.exists():
+        try:
+            old_rec = json.loads(prev.read_text(encoding="utf-8"))
+            if "config" in old_rec:
+                rec["config"] = old_rec["config"]
+                rec["eval_config"] = args.__dict__
+        except Exception:
+            pass
+    prev.write_text(json.dumps(rec, indent=2), encoding="utf-8")
     print(f"\nwrote {out / 'results.json'}")
 
 

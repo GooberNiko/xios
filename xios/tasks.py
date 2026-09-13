@@ -236,8 +236,15 @@ class TaskDataset:
             a = encode_chars(smp.answer)
             seq = [BOS] + p + a + [EOS]
             lab = [-100] * (1 + len(p)) + a + [EOS]
-            seq = seq[:self.seq_len]
-            lab = lab[:self.seq_len]
+            if len(seq) > self.seq_len:
+                # Truncation silently deletes the answer, leaving a row with no
+                # supervised tokens -- which `exact_match` then scored as a free
+                # 100% because "all valid targets matched" is vacuously true of
+                # zero targets. That inflated every evaluation whose prompts
+                # outgrew seq_len. Fail loudly instead.
+                raise ValueError(
+                    f"{self.task} at {smp.steps} steps needs {len(seq)} tokens "
+                    f"but seq_len is {self.seq_len}; raise --seq-len")
             pad = self.seq_len - len(seq)
             m = [0] * (1 + len(p)) + [1] * (len(a) + 1) + [0] * pad
             ids.append(seq + [PAD] * pad)
@@ -268,9 +275,12 @@ def exact_match(model, ds: TaskDataset, steps: int, n: int = 128,
         pred = out.logits[:, :-1].argmax(-1)
         tgt = labels[:, 1:]
         valid = tgt != -100
-        hit = ((pred == tgt) | ~valid).all(dim=1)
+        # Only score rows that actually have a target. A row with none is not
+        # a success, it is a missing measurement.
+        has_target = valid.any(dim=1)
+        hit = ((pred == tgt) | ~valid).all(dim=1) & has_target
         correct += int(hit.sum())
-        total += ids.shape[0]
+        total += int(has_target.sum())
         st = getattr(out, "stats", None)
         if st is not None and getattr(st, "actual_depth", None) is not None:
             # Depth must be measured on the tokens that do the work.

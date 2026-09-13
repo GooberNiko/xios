@@ -321,7 +321,15 @@ At matched parameters XIOS spent 2.65× the compute per token (22.50 vs 8.48 MFL
 | required steps | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 (unseen) |
 |---|---|---|---|---|---|---|---|---|---|
 | baseline (16 layers, 11.8 M, 22.57 MF/tok) | 100 % | 92.2 % | 22.3 % | 5.5 % | 5.9 % | 3.9 % | 2.3 % | 4.7 % | 5.1 % |
-| XIOS (4 stored blocks, 4.2 M, 22.50 MF/tok) | 100 % | 100 % | **100 %** | 100 % | 100 % | 100 % | 100 % | 100 % | **48.0 %** |
+| XIOS, adaptive depth (4.2 M, 22.50 MF/tok) | 100 % | 100 % | 100 % | 100 % | 100 % | 100 % | 100 % | 100 % | 48.0 % |
+| **XIOS, fixed depth** (4.2 M, 22.51 MF/tok) | 100 % | 100 % | **100 %** | 100 % | 100 % | 100 % | 100 % | 100 % | **99.6 %** |
+
+The third row is the corrected headline, added after Experiment 8 showed the
+halting controller was hurting. Identical training args in both XIOS rows and
+the baseline — steps 2500, batch 32, seq 64, lr 1e-3, seed 0, verified from the
+checkpoints themselves rather than from run metadata, because an `--eval-only`
+pass had overwritten the recorded config with its own defaults and made the
+runs look mismatched when they were not.
 
 **The result survives FLOP matching intact.** At 1.00× compute and with 2.8× fewer parameters, XIOS solves every trained depth while a conventional 16-layer stack collapses to chance from four compositions onward. Tripling the baseline's depth (6 → 16 layers) moved its cliff by exactly one step, from 3 to 4 — while XIOS clears all eight.
 
@@ -928,6 +936,58 @@ mechanism might earn its place at scale or with a better-designed controller
 (the soft mixture was already replaced once, by update-gating, for a similar
 reason). It now defaults to what the measurement supports.
 
+### Experiment 9 — test-time depth scaling: the payoff
+
+Cutting the halting controller (Experiment 8) turned iteration count into a
+**free knob at inference**. The same weight file can be run 2 times or 20;
+nothing about the model changes. So: train at one depth, evaluate at others.
+
+Trained on problems needing 1-8 compositions, at exactly **6 iterations**.
+Evaluated on the same checkpoint with no retraining:
+
+| problem steps | 2 | 4 | 6 (trained) | 8 | 10 | 12 | 16 iterations |
+|---|---|---|---|---|---|---|---|
+| 4 | 31.2% | 100% | 100% | 100% | 100% | 100% | 100% |
+| 8 | 2.3% | 14.8% | **100%** | 100% | 100% | 99.2% | 100% |
+| 9 | 3.9% | 8.6% | **100%** | 100% | 100% | 100% | 100% |
+| 10 | 4.7% | 3.9% | 89.8% | **100%** | 100% | 100% | 100% |
+| 12 | 3.9% | 3.9% | **4.7%** | 72.7% | 87.5% | 90.6% | **97.7%** |
+| 14 | 1.6% | 3.1% | 7.0% | 10.2% | 19.5% | 28.9% | **46.9%** |
+
+**At 12 compositions the model goes from 4.7% — chance is 4.2% — to 97.7%,
+purely by running the same weights 16 times instead of 6.** No retraining, no
+extra parameters, no change to the file you downloaded. Required depth rises
+monotonically with difficulty (best at 4, 6, 6, 8, 16, 16 iterations for
+problems of 4, 8, 9, 10, 12, 14 steps).
+
+This is the axis the whole bandwidth argument was pointing at. Extra iterations
+are nearly free in the resource that actually limits local inference: measured,
+raising depth from 4 to 64 multiplies DRAM traffic by **1.000x**, because a
+cache-resident core is fetched once and re-read on-die. So a small local model
+can buy reasoning with test-time compute at a price a dense model cannot match —
+a dense stack has no equivalent knob at all, since its depth is its weights.
+
+Two findings compose here, and the order mattered. Cutting the controller was
+what made depth a knob; the knob then delivered +93 points on problems harder
+than anything in training. An adaptive-halting model cannot be told to think
+longer — it stops at the budget it learned.
+
+**Caveats, plainly.** One task (permutation composition, the friendliest case
+for this mechanism), one seed, one small model. Generalisation does run out: 14
+steps reaches only 46.9% even at 16 iterations, so this is graceful degradation
+rather than unbounded extrapolation. And the compute is real — 16 iterations
+costs 16 iterations of arithmetic; the claim is that it costs almost no extra
+*bandwidth*, which is the binding constraint on weak hardware, not that it is
+free.
+
+This result also depended on fixing a silent evaluation bug found while running
+it: prompts longer than `seq_len` were truncated, which deleted the answer and
+left rows with no supervised tokens — and `((pred == tgt) | ~valid).all()` is
+vacuously **true** of zero targets, so every truncated instance scored a free
+100%. It showed up as 12-step problems being solved perfectly at 2 iterations,
+which is impossible. Truncation now raises, and rows without targets are not
+counted. Any harness that scores "all targets matched" needs this check.
+
 ## Roadmap: what would actually close the gap
 
 Written after the absorption results, because they changed what the right
@@ -1000,6 +1060,14 @@ that runs well on a laptop, which is a different and more achievable prize.
 ## Status
 
 Runs end to end on CPU. All invariant tests pass, including the floor test where XIOS matches a dense baseline exactly.
+
+**Earned, and the best result here:** test-time depth scaling. Because depth is
+a free knob once the halting controller is gone, the same weight file solves
+12-composition problems at **97.7%** when run 16 times, against **4.7%** —
+chance — at the 6 iterations it trained with. A dense model has no equivalent
+knob: its depth is its weights. And extra iterations cost ~no DRAM bandwidth
+(depth 4 -> 64 measured at 1.000x), which is the constraint that actually
+limits local inference.
 
 **What is earned:** weight-shared looped depth is a large, real effect, and it survives the comparison designed to kill it. A 4.2 M-parameter XIOS solves 3-to-8-step permutation composition at 100 % where dense transformers sit at chance — both a parameter-matched 6-layer model *and*, at identical FLOPs, a 16-layer model with 2.8× the weights. Tripling the dense model's depth moved its cliff by one composition; XIOS clears all eight, and reaches 48 % at a depth it never trained on. That is the architecture's central claim working, measured the hard way.
 
