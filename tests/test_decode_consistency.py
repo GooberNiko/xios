@@ -9,9 +9,10 @@ from xios.config import get_config
 from xios.model import XiosChat
 
 
-def run(preset="nano", T=40, split=24, seed=0):
+def run(preset="nano", T=40, split=24, seed=0, adaptive=True):
     torch.manual_seed(seed)
-    cfg = get_config(preset, max_seq_len=512)
+    cfg = get_config(preset, max_seq_len=512, adaptive_depth=adaptive,
+                     target_depth=4.0)
     m = XiosChat(cfg).eval()
     ids = torch.randint(0, cfg.vocab_size, (1, T))
 
@@ -32,9 +33,15 @@ def run(preset="nano", T=40, split=24, seed=0):
 
 
 if __name__ == "__main__":
-    for preset in ("nano",):
-        rel, agree = run(preset)
-        print(f"{preset}: max rel logit err {rel:.3e}   argmax agreement {agree:.1%}")
-        assert agree == 1.0, "prefill/decode disagree on the predicted token"
-        assert rel < 5e-2, f"logit drift too large: {rel}"
-    print("decode consistency verified")
+    # Both depth modes must hold. The fixed-depth path is the one the project
+    # now recommends, and it shipped briefly with `step()` still running the
+    # halting logic while `forward()` ran a fixed count -- 81.2% agreement.
+    # A test that only covered the adaptive path passed throughout.
+    for adaptive in (True, False):
+        rel, agree = run("nano", adaptive=adaptive)
+        tag = "adaptive" if adaptive else "fixed   "
+        print(f"{tag} depth: max rel logit err {rel:.3e}   "
+              f"argmax agreement {agree:.1%}")
+        assert agree == 1.0,             f"prefill/decode disagree on the predicted token (adaptive={adaptive})"
+        assert rel < 5e-2, f"logit drift too large (adaptive={adaptive}): {rel}"
+    print("decode consistency verified for both depth modes")

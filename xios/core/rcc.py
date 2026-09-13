@@ -99,19 +99,33 @@ class RecurrentComputeCore(nn.Module):
         if not getattr(self.cfg, "adaptive_depth", True):
             n = max(1, int(round(self.cfg.target_depth)))
             h = x
+            # Per-depth mixer states must be returned when asked for. Returning
+            # None here meant `prefill` handed decode an empty state, so the
+            # recurrent mixers forgot the prompt entirely and generation
+            # diverged from training (measured: 75% argmax agreement) while the
+            # teacher-forced numbers stayed correct and hid it.
+            new_states: list = [] if return_states else None
             for i in range(n):
                 cond = self._cond(i, device, x.dtype, B)
                 hi = h + self.inject(x)
+                out_states = [] if return_states else None
                 for blk in self.blocks:
-                    hi, _, _ = blk(hi, cond, None, pos=pos)
+                    hi, st, _ = blk(hi, cond, None, return_state=return_states,
+                                    pos=pos)
+                    if return_states:
+                        out_states.append(st)
+                if return_states:
+                    new_states.append(out_states)
                 h = hi
+            if return_states:
+                new_states += [None] * max(0, N - n)
             depth = torch.full((B, T), n, dtype=torch.long, device=device)
             stats = PonderStats(
                 expected_depth=x.new_full((B, T), float(n)),
                 actual_depth=depth, compute_depth=x.new_full((B, T), float(n)),
                 budget_loss=x.new_zeros(()), halt_probs=[], active_frac=[1.0],
                 mask=loss_mask)
-            return h, ([None] * N if return_states else None), stats
+            return h, new_states, stats
 
         x0 = x
         h = x
@@ -236,6 +250,27 @@ class RecurrentComputeCore(nn.Module):
         x0, h = x, x
         R = x.new_ones(B, 1)
         depth = 0
+
+        # Fixed-depth decode must mirror the fixed-depth forward exactly.
+        # Omitting this branch left `step()` running the halting logic while
+        # `forward()` ran a fixed count, so training and generation disagreed
+        # (measured: 81.2% argmax agreement) -- the one invariant this whole
+        # architecture rests on.
+        if not getattr(self.cfg, "adaptive_depth", True):
+            n = min(max(1, int(round(self.cfg.target_depth))), N)
+            for i in range(n):
+                cond = self._cond(i, device, x.dtype, B)
+                hi = h + self.inject(x0)
+                while len(states) <= i:
+                    states.append(None)
+                if states[i] is None:
+                    states[i] = [None] * len(self.blocks)
+                d = deltas[i] if deltas is not None else None
+                for bi, blk in enumerate(self.blocks):
+                    hi, s = blk.step(hi, cond, states[i][bi], delta=d, pos=pos)
+                    states[i][bi] = s
+                h = hi
+            return h, states, n
 
         for i in range(N):
             cond = self._cond(i, device, x.dtype, B)

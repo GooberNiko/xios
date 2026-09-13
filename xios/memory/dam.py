@@ -371,8 +371,9 @@ class DiskAssociativeMemory(nn.Module):
         """
         H, m = self.n_heads, self.m
         if mode == "row_major":
-            self.rank1 = torch.arange(m).repeat(H, 1)
-            self.rank2 = torch.arange(m).repeat(H, 1)
+            dev = self.rank1.device      # keep the layout on the model's device
+            self.rank1 = torch.arange(m, device=dev).repeat(H, 1)
+            self.rank2 = torch.arange(m, device=dev).repeat(H, 1)
             self.layout = mode
             return self
         if not self.morton_ok:
@@ -382,7 +383,7 @@ class DiskAssociativeMemory(nn.Module):
 
         r1 = torch.stack([seriate(self.keys1.data[h]) for h in range(H)])
         r2 = torch.stack([seriate(self.keys2.data[h]) for h in range(H)])
-        self.rank1, self.rank2 = r1, r2
+        self.rank1, self.rank2 = r1.to(self.rank1.device), r2.to(self.rank2.device)
         self.layout = mode
         return self
 
