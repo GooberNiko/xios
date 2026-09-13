@@ -41,6 +41,9 @@ class XiosConfig:
     min_iters: int = 2
     target_depth: float = 4.0       # average iterations the budget pays for
     ponder_eps: float = 0.02        # stop computing a token below this residual
+    adaptive_depth: bool = True     # False = every token runs exactly target_depth
+                                    # iterations, no halting head, no budget loss.
+                                    # The ablation: does the controller earn its place?
     budget_weight: float = 0.05
     budget_mode: str = "lagrangian"   # "fixed" ignores the constraint and just nudges
     dual_lr: float = 0.002           # dual-ascent rate (normalised units)

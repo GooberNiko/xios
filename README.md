@@ -847,6 +847,45 @@ nowhere to put facts. Three options, in the order I would try them:
 3. **Cut it.** If neither of the above pans out, the memory is 800 lines that
    earn nothing and should be deleted rather than defended.
 
+### Experiment 8 — the adaptive-depth controller is harmful; cut it
+
+The roadmap said a mechanism that does nothing should be made to work or
+deleted, not defended. So: same config, same seed, same data, only the
+controller differs. `adaptive_depth=False` runs **exactly** `target_depth`
+iterations for every token — no halting head, no budget loss, no Lagrangian,
+no annealing schedule.
+
+| required steps | adaptive depth | **fixed depth** |
+|---|---|---|
+| 1-8 (trained) | 100% | 100% |
+| **9 (unseen)** | **48.0%** | **99.6%** |
+
+Compute is identical (22.50 vs 22.51 MFLOPs/token) and fixed depth converges
+*faster* (training loss reaches 0 by step 1750 against ~2000).
+
+**The controller was not decoration, it was a liability.** Deleting it roughly
+doubles extrapolation accuracy. The mechanism is plausible in hindsight: a
+halting controller trained on 1-8-step problems learns to stop at its budget,
+and then *caps* the compute available to a 9-step problem — precisely the case
+where more iterations were needed. Fixed depth guarantees every token gets the
+full allowance. Adaptive allocation only helps if the allocation is right, and
+here it was systematically wrong in the direction that matters.
+
+This retires a large amount of machinery: the halting head, the two-sided
+budget loss, the Lagrange multiplier and its dual-ascent tuning, the budget
+annealing curriculum, the soft/hard halting reconciliation, and the per-depth
+`eps` cutoff. All of it existed to solve a problem — allocating compute by
+difficulty — that never materialised and cost accuracy to attempt.
+
+What survives is the part that was always doing the work: **a weight-shared
+core, looped a fixed number of times, sized to fit in cache.** That is a
+simpler architecture than the one this project started with, and a better one.
+
+`adaptive_depth` remains a config flag rather than a deletion, because the
+mechanism might earn its place at scale or with a better-designed controller
+(the soft mixture was already replaced once, by update-gating, for a similar
+reason). It now defaults to what the measurement supports.
+
 ## Roadmap: what would actually close the gap
 
 Written after the absorption results, because they changed what the right
@@ -899,9 +938,10 @@ rather than against a structural disadvantage.
    matters. This could deflate the headline result, which is exactly why it is
    worth running early.
 
-4. **Ablate the ponder controller.** Adaptive depth is currently decorative —
-   depth sits at its budget regardless of difficulty. Either make it work or
-   cut it; a mechanism that does nothing should not be defended.
+4. ~~**Ablate the ponder controller.**~~ **Done — cut it.** See Experiment 8:
+   fixed depth beats adaptive 99.6% vs 48.0% on unseen problem depth, at equal
+   compute, and converges faster. `adaptive_depth=False` is the supported
+   setting now. Revisit only if a better controller design is proposed.
 
 5. **Then, and only then, long-chain-of-thought training on the looped core.**
    Where the frontier's reasoning gains actually live, and where cheap
@@ -935,6 +975,6 @@ at this scale it is a random-feature layer wearing a memory's clothes. That
 leaves the width problem open and the `flagship` preset without a knowledge
 story, which is the most consequential gap in the project.
 
-**What is not earned:** the adaptive part of adaptive depth. Depth sits at its budget regardless of difficulty, and the correlation I previously reported was an artefact of averaging over padding — retracted above. On current evidence the looping is doing all the work and the halting controller is along for the ride; it should be ablated before it is defended. Also unearned: anything about natural language, where this effect should be far smaller, and anything at a scale beyond 4 M parameters.
+**Disproven, and removed:** the adaptive part of adaptive depth. It was ablated, and fixed depth won decisively — **99.6% versus 48.0%** on unseen problem depth at equal compute, converging faster. The halting controller was not neutral; it capped compute exactly where more was needed. The looping was always doing the work. Also unearned: anything about natural language, where this effect should be far smaller, and anything at a scale beyond 4 M parameters.
 
 **What the project is, honestly:** a novel architecture whose looping mechanism demonstrably buys depth that parameters alone do not, wrapped in an apparatus that has now caught eleven of my own errors — including two bugs in the central mechanism, a benchmark with a shortcut, a budget that priced the wrong quantity, and a headline result that was noise. The guards exist because each one caught something. That is what makes the next result worth believing.

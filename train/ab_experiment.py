@@ -78,6 +78,9 @@ def main():
     ap.add_argument("--dim", type=int, default=None)
     ap.add_argument("--core-blocks", type=int, default=None)
     ap.add_argument("--n-kv-heads", type=int, default=None)
+    ap.add_argument("--fixed-depth", action="store_true",
+                    help="ablate the ponder controller: every token runs exactly "
+                         "target_depth iterations, no halting, no budget loss")
     ap.add_argument("--match", default="params", choices=["params", "flops"],
                     help="size the baseline to match XIOS on parameters "
                          "(what XIOS wants) or on FLOPs/token (the harder test)")
@@ -101,7 +104,8 @@ def main():
                             args.target_depth, dim=args.dim,
                             match=args.match, match_depth=args.match_depth,
                             core_blocks=args.core_blocks,
-                            n_kv_heads=args.n_kv_heads)
+                            n_kv_heads=args.n_kv_heads,
+                            adaptive_depth=not args.fixed_depth)
     print(f"task={args.task}  preset={args.preset}  device={dev}")
     print(f"XIOS     {xios.n_params/1e6:7.2f}M params | stored depth {cfg.stored_blocks}"
           f" | effective depth {cfg.effective_depth_avg:.0f}..{cfg.effective_depth_max}")

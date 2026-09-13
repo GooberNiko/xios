@@ -91,6 +91,28 @@ class RecurrentComputeCore(nn.Module):
         if pos is None:
             pos = torch.arange(T, device=device)
 
+        # Fixed-depth ablation: run exactly `target_depth` iterations for every
+        # token, with no halting and no budget term. If this matches adaptive
+        # depth, the controller is decoration and should be deleted rather
+        # than defended -- depth was already measured to sit at its budget
+        # regardless of difficulty.
+        if not getattr(self.cfg, "adaptive_depth", True):
+            n = max(1, int(round(self.cfg.target_depth)))
+            h = x
+            for i in range(n):
+                cond = self._cond(i, device, x.dtype, B)
+                hi = h + self.inject(x)
+                for blk in self.blocks:
+                    hi, _, _ = blk(hi, cond, None, pos=pos)
+                h = hi
+            depth = torch.full((B, T), n, dtype=torch.long, device=device)
+            stats = PonderStats(
+                expected_depth=x.new_full((B, T), float(n)),
+                actual_depth=depth, compute_depth=x.new_full((B, T), float(n)),
+                budget_loss=x.new_zeros(()), halt_probs=[], active_frac=[1.0],
+                mask=loss_mask)
+            return h, ([None] * N if return_states else None), stats
+
         x0 = x
         h = x
         R = x.new_ones(B, T)                       # prob still running
